@@ -3,7 +3,7 @@
 // [[Rcpp::plugins(cpp11)]]
 // [[Rcpp::depends(RcppArmadillo)]]
 using namespace Rcpp;
-using namespace arma; // namespace arma is ignored while compiling C++ code --> add arma:: before vec and mat
+using namespace arma; 
 
 // [[Rcpp::export]]
 double rhobi(double z, double k){
