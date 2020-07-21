@@ -3,7 +3,7 @@
 // [[Rcpp::plugins(cpp11)]]
 // [[Rcpp::depends(RcppArmadillo)]]
 using namespace Rcpp;
-using namespace arma; 
+using namespace arma; // namespace arma is ignored while compiling C++ code --> add arma:: before vec and mat
 
 // [[Rcpp::export]]
 double rhobi(double z, double k){
@@ -47,6 +47,7 @@ double scaleC(arma::vec u, double kp,double cc, double initialsc, int maxit, dou
     total=0;
     j+=1;
   }
+
   return sc;
 }
 
@@ -74,11 +75,13 @@ double sign(double x){
 // [[Rcpp::export]]
 arma::mat betawls( arma::mat X,  arma::mat Y,  arma::mat W){
   // estimated regression coefficient for weighted least squares 
-  
-  // X: nxp matrix (in shooting loops, always nx2: one predictor and constant)
-  // Y: nx1 matrix
-  // W: nxn matrix
-  arma::mat betahat = inv(X.t()*W*X)*X.t()*W*Y;
+  arma::mat betahat;
+
+  if(det(X.t()*W*X)==0){
+    betahat = zeros(2,1);
+  }else{
+    betahat = inv(X.t()*W*X)*X.t()*W*Y;
+  }
 
   return(betahat);
 }
@@ -265,6 +268,7 @@ List shootloop(arma::mat ytilde, arma::mat xtilde, arma::mat betaEst, arma::mat 
   double shat=1;
   int p=xtilde.n_cols+1;
   double err=10*tolout;
+  int flagwt=0;
   vec lastresidscale = zeros(maxIteration,1);
   int flagstuck = 0;
   
@@ -290,7 +294,12 @@ List shootloop(arma::mat ytilde, arma::mat xtilde, arma::mat betaEst, arma::mat 
       }
       wjt=wt.col(indexcol-1);
 
+      double sumwjt=accu(wjt);
 
+      if(sumwjt==0){
+        flagwt=1;
+        break;
+      }
 
       // Simple regression
       outputuniv=univest(x.col(indexcol-1), ytilde, k, wjt, delta, maxituniv, tol, resid,tolscale, maxitscale, scaleVar(indexcol-1));
@@ -337,7 +346,7 @@ List shootloop(arma::mat ytilde, arma::mat xtilde, arma::mat betaEst, arma::mat 
   double alpha=median(ytildevec);
 
   List results=List::create(Named("resid")=resid,Named("betaEst")=betaEst,Named("alpha")=alpha,Named("scaleVar")=scaleVar,Named("weights")=wt,
-                                  Named("iter")=j, Named("xtilde")= xtilde, Named("flagstuck")= flagstuck, Named("lastresidscale") = lastresidscale(j-1));
+                                  Named("iter")=j,Named("flagwt")=flagwt, Named("xtilde")= xtilde, Named("flagstuck")= flagstuck, Named("lastresidscale") = lastresidscale(j-1));
   return(results);
 
 }
@@ -386,6 +395,7 @@ List shootloop_sparse(arma::mat ytilde, arma::mat xtilde, arma::mat betaEst, arm
   double shat=1;
   int p=xtilde.n_cols+1;
   double err=10*tolout;
+  int flagwt=0;
   vec lastresidscale = zeros(maxIteration,1);
   int flagstuck = 0;
  
@@ -409,7 +419,12 @@ List shootloop_sparse(arma::mat ytilde, arma::mat xtilde, arma::mat betaEst, arm
       }
       wjt=wt.col(indexcol-1);
 
+      double sumwjt=accu(wjt);
 
+      if(sumwjt==0){
+        flagwt=1;
+        break;
+      }
 
       // Simple regression
       outputuniv=univest_sparse(x.col(indexcol-1), ytilde, k, wjt, delta, maxituniv, tol, resid,tolscale, maxitscale, lambda, post, scaleVar(indexcol-1));
@@ -459,7 +474,7 @@ List shootloop_sparse(arma::mat ytilde, arma::mat xtilde, arma::mat betaEst, arm
   double sigmahat = scaleC(residall, delta, k,sguess,maxitscale,tolscale);
 
   List results=List::create(Named("resid")=resid,Named("betaEst")=betaEst,Named("alpha")=alpha,Named("scaleVar")=scaleVar,Named("weights")=wt,
-                                  Named("iter")=j, Named("sigmahat")=sigmahat, Named("flagstuck")= flagstuck, Named("lastresidscale") = lastresidscale(j-1));
+                                  Named("iter")=j,Named("flagwt")=flagwt, Named("sigmahat")=sigmahat, Named("flagstuck")= flagstuck, Named("lastresidscale") = lastresidscale(j-1));
   return(results);
 
 }
@@ -501,6 +516,7 @@ List shootloop_sparse_lambdas(arma::mat ytilde, arma::mat xtilde, arma::mat beta
   Rcpp::List scales(llength);
   Rcpp::List weights(llength);
   Rcpp::List iter(llength);
+  Rcpp::List flagwt(llength);
   Rcpp::List sigmahat(llength);
   Rcpp::List flagstuck(llength);
   Rcpp::List lastresidscale(llength);
@@ -514,13 +530,14 @@ List shootloop_sparse_lambdas(arma::mat ytilde, arma::mat xtilde, arma::mat beta
     scales[il] = fit["scaleVar"];
     weights[il] = fit["weights"];
     iter[il] = fit["iter"];
+    flagwt[il] = fit["flagwt"];
     sigmahat[il] = fit["sigmahat"];
     flagstuck[il] = fit["flagstuck"];
     lastresidscale[il] = fit["lastresidscale"];
   }
   
   List results=List::create(Named("resid") = resid, Named("betaEst") = beta, Named("alpha") = alpha, Named("scaleVar") = scales, Named("weights") = weights,
-                                  Named("iter") = iter, Named("sigmahat") = sigmahat, Named("flagstuck") = flagstuck, Named("lastresidscale") = lastresidscale);
+                                  Named("iter") = iter, Named("flagwt") = flagwt, Named("sigmahat") = sigmahat, Named("flagstuck") = flagstuck, Named("lastresidscale") = lastresidscale);
   return(results);
   
 }

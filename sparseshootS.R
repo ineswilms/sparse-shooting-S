@@ -1,7 +1,7 @@
 sparseshooting <- function(x, y, k = 3.420, maxIteration = 100, tol = 10^-2, 
                            betaEst = NULL, intercept = NULL, scaleVar = NULL, xhat = NULL, xtilde = NULL,
                            maxituniv = 1, maxitscale = 100, wvalue = 3, shoot_order = "default",
-                           nlambda = 100, post = TRUE, standardize = TRUE){ 
+                           nlambda = 100, post = TRUE, standardize = TRUE, lambda_grid = NULL, predset = NULL){ 
   #### Function to compute sparse shooting S ####
   
   # x: nxp matrix of predictors
@@ -21,6 +21,7 @@ sparseshooting <- function(x, y, k = 3.420, maxIteration = 100, tol = 10^-2,
   # nlambda: number of values in lambda grid
   # post : TRUE for post-lasso estimation, FALSe for lasso estimation
   # standardize : TRUE standardize predictors, FALSE do not standardize predictors
+  # lambda_grid : sequence of regularization parameters
   
   #### Preliminaries ####
   n <- nrow(x) # sample size
@@ -41,6 +42,9 @@ sparseshooting <- function(x, y, k = 3.420, maxIteration = 100, tol = 10^-2,
   if(is.null(xtilde)){
     xtilde <- apply(X = x, 2, Xinitftc, Xmatrix = x, Xest = xhat)
   }
+  xhat0 <- xhat
+  xtilde0 <- xtilde
+  start_flag <- xtilde!=x
   
   if(shoot_order == "default"){
     order_variables <- 1:p
@@ -54,8 +58,7 @@ sparseshooting <- function(x, y, k = 3.420, maxIteration = 100, tol = 10^-2,
   
   startfit <- NULL
   if(is.null(betaEst)){ # Initialization
-    startfit <- startvalue_OLS(x = x, y = y, k = k, tol = tol, xhat = xhat, xtilde = xtilde,
-                               maxituniv = maxituniv, maxitscale = maxitscale, wvalue = wvalue, shoot_order = shoot_order)
+    startfit <- startvalue_MM(X = x, Y = y, value = wvalue, robcor_fit = robcor_fit, Xinit = xtilde, predset = predset)
     betaEst <- as.matrix(startfit$betaEst)
     intercept <- as.matrix(startfit$intercept)
     scaleVar <- startfit$scaleVar
@@ -74,9 +77,12 @@ sparseshooting <- function(x, y, k = 3.420, maxIteration = 100, tol = 10^-2,
   y <- as.matrix(y)
   
   # Get lambda grid
-  lambda_max <- get_lambda_max(xtilde,y,ytilde,x,xhat,betaEst,intercept,scaleVar,k,delta,maxIteration,tol,maxitscale,maxituniv, 
-                               post, value = wvalue)
-  lambda_grid <- getLambdaGrid(lambda_max,n,p,nlambda)
+  if(is.null(lambda_grid)){
+    lambda_max <- get_lambda_max(xtilde,y,ytilde,x,xhat,betaEst,intercept,scaleVar,k,delta,maxIteration,tol,maxitscale,maxituniv, 
+                                 post, value = wvalue)
+    lambda_grid <- getLambdaGrid(lambda_max,n,p,nlambda)
+  }
+  
   
   fit_regression <- selectModel(lambda_grid = lambda_grid, ytilde = ytilde, xtilde = xtilde, xhat = xhat, x = x, wt = wt,
                                 betaEst = betaEst, intercept = intercept, scaleVar = scaleVar, k = k, delta = delta,
@@ -84,23 +90,44 @@ sparseshooting <- function(x, y, k = 3.420, maxIteration = 100, tol = 10^-2,
                                 post = post,  value = wvalue)
   
   # Put the coefficients and the weights back in the order of the columns X provided by the user
-  betahat <- rep(NA, p)
+  betahat <- betahat_ln <- rep(NA, p)
+  
+  # Results for BIC with sigma and ln_sigma
   betahat[order_variables] <- fit_regression$coef_opt
+  betahat_ln[order_variables] <- fit_regression$coef_opt_ln
+  betahats <- lapply(fit_regression$get_coefs$betaEst, p = p, order_variables = order_variables, function(X, p, order_variables){get_beta <- rep(NA, p); get_beta[order_variables] <- X; return(get_beta)})
+  
   alphahat <- fit_regression$alpha_opt
-  weights <- matrix(NA, n, p)
+  alphahat_ln <- fit_regression$alpha_opt_ln
+  alphahats <- fit_regression$get_coefs$alpha
+  weights <- weights_ln <- matrix(NA, n, p)
   weights[, order_variables] <- fit_regression$weights_opt
+  weights_ln[, order_variables] <- fit_regression$weights_opt_ln
   
   if(standardize){
     betahat <-  betahat/sx 
+    betahat_ln <- betahat_ln/sx
     alphahat <- alphahat - sum(betahat*mx)
+    alphahat_ln <- alphahat_ln - sum(betahat_ln*mx)
+    
+    betahats <- lapply(betahats, sx = sx, function(X, sx){X/sx})
+    alphahats <- lapply(fit_regression$lambdas, lambdas = fit_regression$lambdas, alphas = alphahats, betas = betahats, 
+                        mx = mx, function(X, lambdas, alphas, betas, mx){
+                          index <- which(lambdas==X)
+                          constant <- alphas[[index]] - sum(betas[[index]]*mx)
+                          return(constant)
+                        })
   }
   
-  out <- list("coef" = c(alphahat, betahat), "weights" = weights, "iter" = fit_regression$iter_opt)
+  out <- list("coef" = c(alphahat, betahat), "weights" = weights, "iter" = fit_regression$iter_opt, 
+              "fits" = fit_regression, "betahats" = betahats, "alphahats" = alphahats , 
+              "lambda_opt" = fit_regression$lambda_opt, "lambdas" = fit_regression$lambdas, "start_flag" = start_flag,
+              "coef_ln" = c(alphahat_ln, betahat_ln), "weights_ln" = weights_ln, "startfit" = startfit, "xhat" = xhat0, "xtilde" = xtilde0)
 }
 
 shooting <- function(x, y, k = 3.420, maxIteration = 100, tol = 10^-2, 
                      betaEst = NULL, intercept = NULL, scaleVar = NULL, xhat = NULL, xtilde = NULL,
-                     maxituniv = 1, maxitscale = 100, wvalue = 3, shoot_order = "default", standardize = TRUE){
+                     maxituniv = 1, maxitscale = 100, wvalue = 3, shoot_order = "default", standardize = TRUE, predset = NULL){
   #### Function to compute shooting S ####
   
   # x: nxp matrix of predictors
@@ -139,6 +166,9 @@ shooting <- function(x, y, k = 3.420, maxIteration = 100, tol = 10^-2,
   if(is.null(xtilde)){
     xtilde <- apply(X = x, 2, Xinitftc, Xmatrix = x, Xest = xhat)
   }
+  xhat0 <- xhat
+  xtilde0 <- xtilde
+  start_flag <- xtilde!=x 
   
   if(shoot_order == "default"){
     order_variables <- 1:p
@@ -152,13 +182,12 @@ shooting <- function(x, y, k = 3.420, maxIteration = 100, tol = 10^-2,
   
   startfit <- NULL
   if(is.null(betaEst)){ # Initialization
-    startfit <- startvalue_OLS(x = x, y = y, k = k, tol = tol, xhat = xhat, xtilde = xtilde, 
-                                 maxituniv = maxituniv, maxitscale = maxitscale, wvalue = wvalue, shoot_order = shoot_order)
+    startfit <- startvalue_MM(X = x, Y = y, value = wvalue, robcor_fit = robcor_fit, Xinit = xtilde, predset = predset)
     betaEst <- as.matrix(startfit$betaEst)
     intercept <- as.matrix(startfit$intercept)
     scaleVar <- startfit$scaleVar
   }
-
+  
   betaEst <- as.matrix(betaEst[order_variables, 1])
   intercept <- as.matrix(intercept[order_variables, 1])
   scaleVar <- scaleVar[order_variables]
@@ -166,7 +195,7 @@ shooting <- function(x, y, k = 3.420, maxIteration = 100, tol = 10^-2,
   ytilde <- y - xtilde%*%betaEst
   x <- x[, order_variables]
   xhat <- xhat[, order_variables]
-
+  
   # Initialization
   wt <- matrix(NA, ncol=p, nrow=n)
   y <- as.matrix(y)
@@ -183,19 +212,19 @@ shooting <- function(x, y, k = 3.420, maxIteration = 100, tol = 10^-2,
   alphahat <- shootfit$alpha
   weights <- matrix(NA, n, p)
   weights[, order_variables] <- shootfit$weights
-
+  
   if(standardize){
     betahat <-  betahat/sx 
     alphahat <- alphahat - sum(betahat*mx)
   }
   
-  out <- list("coef" = c(alphahat, betahat), "weights" = weights,  "iter" = shootfit$iter) 
+  out <- list("coef" = c(alphahat, betahat), "weights" = weights,  "iter" = shootfit$iter, "startfit" = startfit,
+              "xhat" = xhat0, "xtilde" = xtilde0, "start_flag" = start_flag) 
 }
 
 
 
 #### AUXILIARY FUNCTIONS ####
-#### AUX FUNCTIONS ####
 
 robcorr <- function(X, Y){
   # Kendall's correlations
@@ -203,34 +232,6 @@ robcorr <- function(X, Y){
   predcor <- order(abs(robcor), decreasing = T)
   
   out <- list("robcor" = robcor, "predcor" = predcor)
-}
-
-startvalue_OLS <- function(x, y, k = 3.420, tol = 10^-2, xhat = NULL, xtilde = NULL,
-                           maxituniv = 1, maxitscale = 100, wvalue = 3, shoot_order = "default", robcor_fit = NULL){
-  # Starting Value 
-  
-  ys <- robStandardize(y)
-  my <- attr(ys, "center")
-  sy <- attr(ys, "scale")
-  weights <- c(abs((y - my)/sy) <= wvalue)*1
-  betaEst <- rep(0, ncol(x))
-  kpred <- min(round(n/2),p) # Set of initial predictors
-  if(is.null(robcor_fit)){
-    robcor_fit <- robcorr(X = x, Y = y)
-  }
-  robcor <- robcor_fit$robcor
-  predcor <- robcor_fit$predcor
-  predset <- predcor[1:kpred]
-  
-  OLSfit <- lm(y ~ xtilde[, predset], weights = weights)
-  betaEst[predset] <- matrix(OLSfit$coef[-1], ncol = 1)
-  betaEst <- matrix(betaEst, ncol = 1)
-  intercept <- matrix(OLSfit$coef[1], ncol = 1, nrow = ncol(x))
-  resid <- OLSfit$residuals
-  scaleVar <- rep(median(abs(resid))/.6745, ncol(x))
-  
-  out <- list("betaEst" = betaEst, "intercept" = intercept, "scaleVar" = scaleVar, "x_tilde" = xtilde,
-              "weights" = weights) 
 }
 
 Xestimfast <- function(Xmatrix, value = 3){ 
@@ -248,7 +249,7 @@ Xestimfast <- function(Xmatrix, value = 3){
     sx <- attr(Xstand, "scale")
     
     # Univariate Robust Regression
-    fit <- lmrob(U ~ Xdata[, i.pred], setting = "KS2011")
+    fit <- suppressWarnings(lmrob(U ~ Xdata[, i.pred], setting = "KS2011"))
     rs <- fit$residuals/fit$scale
     Xstar <- fit$fitted.values # Fitted values
     xstars <- (Xstar - mx)/sx
@@ -385,9 +386,51 @@ selectModel <- function(lambda_grid,ytilde,xtilde,xhat,x,wt,betaEst,intercept,sc
   dfs <- unlist(lapply(get_coefs$betaEst, function(U){length(which(U!=0))}))
   sigmahat <- unlist(get_coefs$sigmahat)
   bic_sigmas <- sigmahat^2 + dfs*(log(n)/n)
+  bic_ln_sigmas <- log(sigmahat^2) + dfs*(log(n)/n)
   minimum_sigmas <- which.min(bic_sigmas)
+  minimum_ln_sigmas <- which.min(bic_ln_sigmas)
   
   out <- list("get_coefs" = get_coefs, "lambdas" = lambda_grid,
               "coef_opt" = get_coefs$betaEst[[minimum_sigmas]], "lambda_opt" = lambda_grid[minimum_sigmas], "BIC_opt" = bic_sigmas[minimum_sigmas],
-              "weights_opt" = get_coefs$weights[[minimum_sigmas]], "alpha_opt" = get_coefs$alpha[[minimum_sigmas]], "iter_opt" = get_coefs$iter[[minimum_sigmas]])
+              "weights_opt" = get_coefs$weights[[minimum_sigmas]], "alpha_opt" = get_coefs$alpha[[minimum_sigmas]], "iter_opt" = get_coefs$iter[[minimum_sigmas]],
+              
+              "coef_opt_ln" = get_coefs$betaEst[[minimum_ln_sigmas]], "lambda_opt_ln" = lambda_grid[minimum_ln_sigmas], "BIC_opt_ln" = bic_sigmas[minimum_ln_sigmas],
+              "weights_opt_ln" = get_coefs$weights[[minimum_ln_sigmas]], "alpha_opt_ln" = get_coefs$alpha[[minimum_ln_sigmas]], "iter_opt_ln" = get_coefs$iter[[minimum_ln_sigmas]]
+  )
+}
+
+startvalue_MM <- function(X, Y, value, robcor_fit = NULL, Xinit = NULL, predset = NULL){
+  # Function to obtain starting value
+  # X : nxp matrix of regressors
+  # Y: n-dimensional response vector
+  # value : cut-off value for outlier flagging 
+  # robcor_fit : robust correlations
+  # Xinit : Xclean 
+  
+  # 0. Initialization # 
+  p <- ncol(X)
+  n <- nrow(X)
+  betaEst <- rep(0,p) 
+  
+  # 1. Select initial predictor set. Try out: Most robustly correlated one # 
+  if(is.null(predset)){
+    kpred <- min(round(n/2),p) # Set of predictors
+    if(is.null(robcor_fit)){
+      robcor_fit <- robcorr(X = X, Y = Y)
+      
+    }
+    robcor <- robcor_fit$robcor
+    predcor <- robcor_fit$predcor
+    predset <- predcor[1:kpred]
+  }
+
+  
+  # MM-FIT
+  fitinit <- suppressWarnings(lmrob(Y~., data = cbind(Y, data.frame(Xinit[, predset])), setting = "KS2011"))
+  betaEst[predset] <- fitinit$coef[-1]
+  intercept <- rep.int(fitinit$coef[1], p)
+  scaleVar <- rep.int(fitinit$scale, p)
+  
+  out <- list("betaEst" = as.matrix(betaEst), "intercept" = as.matrix(intercept), "scaleVar" = scaleVar, "Xinit" = Xinit)
+  
 }
