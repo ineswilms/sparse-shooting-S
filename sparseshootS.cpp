@@ -539,5 +539,4 @@ List shootloop_sparse_lambdas(arma::mat ytilde, arma::mat xtilde, arma::mat beta
   List results=List::create(Named("resid") = resid, Named("betaEst") = beta, Named("alpha") = alpha, Named("scaleVar") = scales, Named("weights") = weights,
                                   Named("iter") = iter, Named("flagwt") = flagwt, Named("sigmahat") = sigmahat, Named("flagstuck") = flagstuck, Named("lastresidscale") = lastresidscale);
   return(results);
-  
 }
